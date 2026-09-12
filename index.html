@@ -1110,18 +1110,17 @@
     // Fast in-browser image optimization (<50ms) to ensure lightning upload and OCR (<2s total)
     function optimizeScreenshot(file) {
       return new Promise((resolve) => {
-        if (file.size < 250 * 1024) {
-          resolve(file);
-          return;
-        }
         const img = new Image();
         const reader = new FileReader();
         reader.onload = (e) => {
           img.onload = () => {
-            const canvas = document.createElement('canvas');
+            const maxDim = 720;
             let w = img.width;
             let h = img.height;
-            const maxDim = 1024;
+            if (w <= maxDim && h <= maxDim && file.size < 150 * 1024) {
+              resolve(file);
+              return;
+            }
             if (w > maxDim || h > maxDim) {
               if (w > h) {
                 h = Math.round((h * maxDim) / w);
@@ -1131,6 +1130,7 @@
                 h = maxDim;
               }
             }
+            const canvas = document.createElement('canvas');
             canvas.width = w;
             canvas.height = h;
             const ctx = canvas.getContext('2d');
@@ -1141,7 +1141,7 @@
               } else {
                 resolve(file);
               }
-            }, 'image/jpeg', 0.88);
+            }, 'image/jpeg', 0.85);
           };
           img.onerror = () => resolve(file);
           img.src = e.target.result;
@@ -1168,11 +1168,16 @@
       const formData = new FormData();
       formData.append('file', optimizedFile);
 
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
+
       try {
         const res = await fetch(`${API_BASE_URL}/api/scan-screenshot`, {
           method: 'POST',
-          body: formData
+          body: formData,
+          signal: controller.signal
         });
+        clearTimeout(timeoutId);
         const data = await res.json();
         
         loadingModal.classList.remove('active');
@@ -1185,9 +1190,14 @@
           showToast(data.message || 'UTR Not Matched', 'error');
         }
       } catch (err) {
+        clearTimeout(timeoutId);
         loadingModal.classList.remove('active');
         screenshotInput.value = '';
-        showToast('Server Connection Error', 'error');
+        if (err.name === 'AbortError') {
+          showToast('Scan Timed Out. Please enter UTR manually.', 'error');
+        } else {
+          showToast('Server Connection Error', 'error');
+        }
       }
     }
 
@@ -1222,6 +1232,9 @@
       loadingModal.classList.add('active');
       submitVerifyBtn.disabled = true;
 
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+
       try {
         const res = await fetch(`${API_BASE_URL}/api/verify`, {
           method: 'POST',
@@ -1229,8 +1242,10 @@
           body: JSON.stringify({
             utr: utr,
             amount: amount
-          })
+          }),
+          signal: controller.signal
         });
+        clearTimeout(timeoutId);
         const data = await res.json();
         
         loadingModal.classList.remove('active');
@@ -1243,9 +1258,14 @@
           showToast(data.message || 'UTR Not Matched', 'error');
         }
       } catch (err) {
+        clearTimeout(timeoutId);
         loadingModal.classList.remove('active');
         submitVerifyBtn.disabled = false;
-        showToast('Server Connection Error', 'error');
+        if (err.name === 'AbortError') {
+          showToast('Verification Timed Out. Please retry.', 'error');
+        } else {
+          showToast('Server Connection Error', 'error');
+        }
       }
     });
 
