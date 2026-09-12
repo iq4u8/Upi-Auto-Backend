@@ -1216,7 +1216,7 @@
       }
 
       if (utr.length < 8) {
-        showToast('UTR must be 12 digits', 'error');
+        showToast('Incorrect UTR Number', 'error');
         utrInput.focus();
         return;
       }
@@ -1255,7 +1255,7 @@
           showSuccessReceipt(data.data);
           showToast('Payment Verified Successfully', 'success');
         } else {
-          showToast(data.message || 'UTR Not Matched', 'error');
+          showToast(data.message || 'Incorrect UTR Number', 'error');
         }
       } catch (err) {
         clearTimeout(timeoutId);

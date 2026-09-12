@@ -687,8 +687,8 @@ async def verify_payment(req: VerifyPaymentRequest):
     if len(utr) < 8 or len(utr) > 30:
         return JSONResponse(status_code=400, content={
             "success": False,
-            "code": "INVALID_UTR_FORMAT",
-            "message": "Invalid UTR Format"
+            "code": "INCORRECT_UTR",
+            "message": "Incorrect UTR Number"
         })
 
     conn = sqlite3.connect(DB_FILE)
@@ -720,7 +720,7 @@ async def verify_payment(req: VerifyPaymentRequest):
             return JSONResponse(status_code=400, content={
                 "success": False,
                 "code": "ALREADY_REDEEMED",
-                "message": "UTR Already Redeemed",
+                "message": "Incorrect UTR Number",
                 "verified_at": verified_at
             })
             
@@ -757,13 +757,30 @@ async def verify_payment(req: VerifyPaymentRequest):
             }
 
     # Real Ledger Check:
-    # If transaction not found in database, REJECT IT! No fake auto-approvals!
+    # If transaction not found in database, return "Incorrect UTR Number"
     conn.close()
     return JSONResponse(status_code=404, content={
         "success": False,
-        "code": "PAYMENT_NOT_FOUND",
-        "message": "UTR Not Matched"
+        "code": "INCORRECT_UTR",
+        "message": "Incorrect UTR Number"
     })
+
+
+@app.post("/api/admin/clear-utr")
+async def clear_utr(utr: str = Query(..., description="UTR to clear"), token: str = Query(..., description="Admin Token")):
+    """Allow admin to reset/clear a test UTR so it can be re-tested multiple times"""
+    if token != ADMIN_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    c_utr = clean_utr(utr)
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM transactions WHERE utr = ?", (c_utr,))
+    c.execute("DELETE FROM image_hashes WHERE utr = ?", (c_utr,))
+    deleted = c.rowcount
+    conn.commit()
+    conn.close()
+    return {"success": True, "message": f"UTR {utr} reset successfully", "deleted_rows": deleted}
+
 
 
 # =============================================================================
