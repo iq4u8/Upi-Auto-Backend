@@ -5,3 +5,5 @@ python-dotenv==1.0.1
 pydantic==2.9.2
 python-multipart==0.0.27
 rapidocr_onnxruntime>=1.4.0
+numpy>=1.24.0
+opencv-python-headless>=4.8.0
