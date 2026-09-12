@@ -187,7 +187,7 @@ def clean_utr(utr_str: str) -> str:
         return ""
     return re.sub(r"[\s\-_]", "", str(utr_str)).strip()
 
-def parse_screenshot_text(text: str):
+def parse_screenshot_text(text: str, lines: Optional[list] = None):
     """
     Extracts UTR, Amount, Date/Recency, Beneficiary from OCR output text.
     """
@@ -195,8 +195,8 @@ def parse_screenshot_text(text: str):
     
     # 1. Extract UTR / UPI Transaction ID
     utr = None
-    # Matches: 'UPI transaction ID: 625552040875', 'UPI Ref No: ...', 'UTR: ...', 'Txn ID: ...'
-    utr_match = re.search(r"(?:UPI\s*(?:transaction\s*)?ID|UTR|Ref(?:\s*No)?|Transaction\s*ID|Txn\s*ID|RRN|Txn\s*Ref)[:\s#]*([0-9a-zA-Z]{10,24})", text_clean, re.I)
+    # Matches: 'UPI transaction ID: 625552040875', 'UPI transoction ID: ...', 'UPI Ref No: ...', 'UTR: ...', 'Txn ID: ...'
+    utr_match = re.search(r"(?:UPI\s*(?:trans[ao]ction\s*)?ID|UTR|Ref(?:\s*No)?|Trans[ao]ction\s*ID|Txn\s*ID|RRN|Txn\s*Ref)[:\s#]*([0-9a-zA-Z]{10,24})", text_clean, re.I)
     if utr_match:
         val = utr_match.group(1).strip()
         if len(val) >= 10:
@@ -214,49 +214,100 @@ def parse_screenshot_text(text: str):
 
     # 2. Extract Amount
     amount = None
-    # Strategy 1: 'Payment of <symbol> <number>' (Google Pay format e.g. Payment of ₹1 completed)
-    amt_p = re.search(r"Payment\s+of\s+[^0-9\n]{0,5}\s*([0-9]+(?:\.[0-9]{1,2})?)", text_clean, re.I)
-    if amt_p:
+
+    # Strategy 1: Google Pay format: 'Payment of 1 completed', 'Paymentof1completed', 'Payment of ₹1'
+    m1 = re.search(r"Payment\s*of\s*[^0-9\na-zA-Z]{0,5}\s*([0-9]+(?:\.[0-9]{1,2})?)\s*(?:completed|success|paid)?", text_clean, re.I)
+    if m1:
         try:
-            amount = float(amt_p.group(1))
+            val = float(m1.group(1))
+            if 0 < val < 500000:
+                amount = val
         except ValueError:
             pass
 
-    # Strategy 2: 'Paid <symbol> <number>' or 'Sent <number>' or 'Debited <number>'
-    if not amount:
-        m2 = re.search(r"(?:Paid|Sent|Transfer(?:red)?|Debited|Amount[:\s]*)[^0-9\n]{0,5}\s*([0-9]+(?:\.[0-9]{1,2})?)", text_clean, re.I)
+    # Strategy 2: Currency symbol (₹, \u20b9, ?, Rs, INR) followed by number (e.g. ₹1, ₹ 100, Rs 50)
+    if amount is None:
+        m2 = re.search(r"(?:[₹\u20b9\?]|Rs\.?|INR)\s*([0-9,]+(?:\.[0-9]{1,2})?)(?![0-9a-zA-Z%])", text_clean, re.I)
         if m2:
             try:
-                amount = float(m2.group(1))
+                val = float(m2.group(1).replace(",", ""))
+                if 0 < val < 500000:
+                    amount = val
             except ValueError:
                 pass
 
-    # Strategy 3: Explicit Currency symbols (₹, Rs, INR)
-    if not amount:
-        m3 = re.search(r"(?:[₹\u20b9]|Rs\.?|INR)\s*([0-9,]+(?:\.[0-9]{1,2})?)", text_clean, re.I)
+    # Strategy 3: Number followed by action words (e.g. '2 debited from your bank', '500 transferred', '100 credited')
+    if amount is None:
+        m3 = re.search(r"\b([0-9]+(?:\.[0-9]{1,2})?)\s*(?:debited|credited|transferred|paid|sent)\b", text_clean, re.I)
         if m3:
             try:
-                amount = float(m3.group(1).replace(",", ""))
+                val = float(m3.group(1))
+                if 0 < val < 500000:
+                    amount = val
             except ValueError:
                 pass
 
-    # Strategy 4: Big numbers with OCR currency distortions like 'B 2', '₹ 2', 'R 50'
-    if not amount:
-        m4 = re.search(r"(?:^|\s)[₹\u20b9BR\?]\s*([0-9]+(?:\.[0-9]{1,2})?)(?:\s|$)", text_clean)
+    # Strategy 4: Action words followed by number (e.g. 'Paid 150', 'Debited 50', 'Sent 200', 'Transfer 500')
+    if amount is None:
+        m4 = re.search(r"(?:debited|credited|paid|sent|transfer(?:red)?)\s*(?:of|for|amount)?\s*[^0-9\na-zA-Z]{0,5}\s*([0-9]+(?:\.[0-9]{1,2})?)\b", text_clean, re.I)
         if m4:
             try:
-                amount = float(m4.group(1))
+                val = float(m4.group(1))
+                if 0 < val < 500000:
+                    amount = val
             except ValueError:
                 pass
 
-    # Strategy 5: Standalone decimal amounts (e.g. 100.00)
-    if not amount:
-        floats = re.findall(r"\b([0-9]+\.[0-9]{2})\b", text_clean)
-        if floats:
+    # Strategy 5: Amount followed by currency symbol (e.g. '2 ? Paid to', '100 ₹')
+    if amount is None:
+        m5 = re.search(r"\b([0-9]+(?:\.[0-9]{1,2})?)\s*(?:[₹\u20b9\?]|Rs\.?|INR)\b", text_clean, re.I)
+        if m5:
             try:
-                amount = float(floats[0])
+                val = float(m5.group(1))
+                if 0 < val < 500000:
+                    amount = val
             except ValueError:
                 pass
+
+    # Strategy 6: Explicit amount labels: Amount: 100, Total: 100, Amt: 100
+    if amount is None:
+        m6 = re.search(r"(?:Amount|Total|Amt|Txn\s*Amt)[:\s]*[^0-9\n]{0,5}\b([0-9]+(?:\.[0-9]{1,2})?)\b", text_clean, re.I)
+        if m6:
+            try:
+                val = float(m6.group(1))
+                if 0 < val < 500000:
+                    amount = val
+            except ValueError:
+                pass
+
+    # Strategy 7: Standalone decimal amounts (e.g. 100.00, 50.50)
+    if amount is None:
+        floats = re.findall(r"\b([0-9]{1,6}\.[0-9]{2})\b", text_clean)
+        for fl in floats:
+            try:
+                val = float(fl)
+                if 0 < val < 500000:
+                    amount = val
+                    break
+            except ValueError:
+                pass
+
+    # Strategy 8: Check individual lines for standalone amount (e.g. line is just '₹ 150' or '150')
+    if amount is None and lines:
+        for line in lines:
+            line_str = line.strip()
+            # Ignore lines that are times (10:25), dates (2026), percentages (54%)
+            if ":" in line_str or "%" in line_str or "/" in line_str:
+                continue
+            lm = re.match(r"^[₹\u20b9\?Rs\.\s]*([0-9]{1,6}(?:\.[0-9]{1,2})?)\s*[₹\u20b9\?]?$", line_str, re.I)
+            if lm:
+                try:
+                    val = float(lm.group(1))
+                    if 0 < val < 500000 and val not in [2024, 2025, 2026, 2027]:
+                        amount = val
+                        break
+                except ValueError:
+                    pass
 
     # 3. Beneficiary validation (must match Priyanshu, Pandey, iq4u8, s3qmd4q, pty, paytm)
     beneficiary_keywords = ["priyanshu", "pandey", "iq4u8", "s3qmd4q", "pty", "paytm"]
@@ -480,9 +531,10 @@ async def scan_screenshot(
             "message": "No Readable Text in Screenshot"
         })
 
-    # Concatenate all detected lines
-    full_text = " ".join([line[1] for line in ocr_result])
-    parsed = parse_screenshot_text(full_text)
+    # Concatenate all detected lines and pass individual lines for ultra-accurate amount detection
+    lines_text = [line[1] for line in ocr_result]
+    full_text = " ".join(lines_text)
+    parsed = parse_screenshot_text(full_text, lines_text)
 
     # 5. FRAUD CHECKS
     # Old Screenshot Check (Past years)
