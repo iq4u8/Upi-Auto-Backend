@@ -12,6 +12,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Pre-download and cache all RapidOCR ONNX models inside image for instant zero-latency processing
+RUN python -c "from rapidocr_onnxruntime import RapidOCR; import numpy as np; RapidOCR()(np.zeros((100, 100, 3), dtype=np.uint8))"
+
 # Copy application source code
 COPY . .
 
